@@ -1,0 +1,71 @@
+package server
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/RaFYWStud/LearningSessionBackend/config"
+	"github.com/RaFYWStud/LearningSessionBackend/config/database"
+	"github.com/RaFYWStud/LearningSessionBackend/config/middleware"
+	"github.com/RaFYWStud/LearningSessionBackend/controller"
+	"github.com/gin-gonic/gin"
+
+	"github.com/RaFYWStud/LearningSessionBackend/repository"
+	"github.com/RaFYWStud/LearningSessionBackend/service"
+	"gorm.io/gorm"
+)
+
+func Run() {
+	log.Println("Starting application...")
+
+	cfg := config.Get()
+	if cfg == nil {
+		log.Fatal("Failed to load configuration")
+		return
+	}
+
+	db, _, err := database.ConnectDB()
+	if err != nil {
+		log.Fatal("Failed to connect to the database:", err)
+		return
+	}
+
+	// Default: start the server
+	startServer(cfg, db)
+}
+
+func startServer(cfg *config.AppConfigurationMap, db *gorm.DB) {
+	// Initialize repositories and services
+	repo := repository.New(db)
+	serv := service.New(repo)
+
+	// Set Gin mode
+	if cfg.IsProduction {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	// Create Gin router
+	r := gin.New()
+	r.Use(middleware.CORSMiddleware())
+	r.Use(middleware.GlobalRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst, map[string]struct{}{}))
+	r.Use(gin.Logger())
+	r.Use(gin.Recovery())
+	r.Static("/static", "./static")
+
+	// Register routes
+	controller.New(r, serv)
+
+	// HTTP server
+	srv := &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.Port),
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	log.Printf("Server is running on port %d", cfg.Port)
+	log.Fatal(srv.ListenAndServe())
+}
